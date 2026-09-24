@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>spotify-transfer</title>
+<style>
+  :root { --bg:#121212; --card:#1e1e1e; --card2:#282828; --text:#fff; --sub:#b3b3b3; --green:#1db954; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { background:var(--bg); color:var(--text); font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif; }
+  .wrap { max-width:640px; margin:0 auto; padding:24px 16px 80px; }
+  h1 { font-size:22px; margin-bottom:20px; }
+  h1 span { color:var(--green); }
+  .row { display:flex; gap:8px; margin-bottom:14px; }
+  select, input[type=text] {
+    flex:1; padding:12px 14px; border-radius:8px; border:1px solid #333;
+    background:var(--card); color:var(--text); font-size:15px; outline:none;
+  }
+  input[type=text]:focus, select:focus { border-color:var(--green); }
+  button {
+    padding:10px 16px; border:none; border-radius:20px; background:var(--green);
+    color:#000; font-weight:600; font-size:14px; cursor:pointer;
+  }
+  button.secondary { background:var(--card2); color:var(--text); }
+  button:disabled { opacity:.45; cursor:default; }
+  #login { display:block; margin:80px auto; padding:14px 32px; font-size:16px; }
+  .track {
+    display:flex; align-items:center; gap:12px; padding:10px; border-radius:8px;
+    background:var(--card); margin-bottom:8px;
+  }
+  .track:hover { background:var(--card2); }
+  .track img { width:48px; height:48px; border-radius:4px; background:#333; }
+  .meta { flex:1; min-width:0; }
+  .meta .name { font-size:15px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .meta .sub { font-size:13px; color:var(--sub); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .added { background:var(--card2); color:var(--sub); }
+  #more { display:none; margin:12px auto; }
+  #toast {
+    position:fixed; bottom:24px; left:50%; transform:translateX(-50%);
+    background:var(--green); color:#000; padding:10px 20px; border-radius:20px;
+    font-weight:600; opacity:0; transition:opacity .25s; pointer-events:none;
+  }
+  .muted { color:var(--sub); font-size:14px; text-align:center; margin-top:24px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1><span>●</span> spotify-transfer</h1>
+  <div id="app" style="display:none">
+    <div class="row">
+      <select id="playlist"></select>
+      <button class="secondary" id="newPl">＋ New</button>
+    </div>
+    <div class="row">
+      <input type="text" id="q" placeholder="Search songs or artists…" autocomplete="off">
+    </div>
+    <div id="results"></div>
+    <button id="more" class="secondary">Load more</button>
+    <div id="hint" class="muted">Pick a playlist, then search. Click a song to add it.</div>
+  </div>
+  <button id="login" style="display:none" onclick="location='/login'">Log in with Spotify</button>
+</div>
+<div id="toast"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+let inPlaylist = new Set();   // track ids already in the selected playlist
+let lastQuery = "";
+let shown = 0;
+
+async function api(path, opts) {
+  const r = await fetch(path, opts);
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.error || r.status);
+  return data;
+}
+
+function toast(msg, ok = true) {
+  const t = $("toast");
+  t.textContent = msg;
+  t.style.background = ok ? "var(--green)" : "#e0245e";
+  t.style.opacity = 1;
+  setTimeout(() => (t.style.opacity = 0), 1800);
+}
+
+async function init() {
+  const { authed } = await api("/api/status");
+  if (!authed) { $("login").style.display = "block"; return; }
+  $("app").style.display = "block";
+  const { playlists } = await api("/api/playlists");
+  const sel = $("playlist");
+  sel.innerHTML = playlists.map(p =>
+    `<option value="${p.id}">${p.name}${p.total != null ? ` (${p.total})` : ""}</option>`).join("");
+  if (playlists.length) await loadPlaylistIds(sel.value);
+}
+
+async function loadPlaylistIds(pid) {
+  inPlaylist = new Set();
+  try {
+    const { ids } = await api(`/api/playlists/${pid}/track_ids`);
+    inPlaylist = new Set(ids);
+  } catch (e) { toast("Couldn't read playlist: " + e.message, false); }
+  // refresh ✓ marks on any visible results
+  document.querySelectorAll(".track").forEach(el => markAdded(el, inPlaylist.has(el.dataset.id)));
+}
+
+function markAdded(el, yes) {
+  el.classList.toggle("added", yes);
+  el.querySelector(".state").textContent = yes ? "✓" : "＋";
+}
+
+function render(tracks, append) {
+  const box = $("results");
+  if (!append) { box.innerHTML = ""; shown = 0; }
+  for (const t of tracks) {
+    const el = document.createElement("div");
+    el.className = "track";
+    el.dataset.id = t.id;
+    el.innerHTML = `
+      ${t.image ? `<img src="${t.image}" alt="">` : `<div style="width:48px;height:48px"></div>`}
+      <div class="meta">
+        <div class="name">${t.name}</div>
+        <div class="sub">${t.artists} · ${t.album}</div>
+      </div>
+      <button class="state secondary">＋</button>`;
+    markAdded(el, inPlaylist.has(t.id));
+    el.onclick = () => addTrack(t, el);
+    box.appendChild(el);
+    shown++;
+  }
+  $("more").style.display = tracks.length ? "block" : "none";
+  $("hint").style.display = "none";
+  if (!append && !tracks.length) box.innerHTML = `<div class="muted">No results.</div>`;
+}
+
+async function addTrack(t, el) {
+  if (inPlaylist.has(t.id)) { toast("Already in playlist", false); return; }
+  try {
+    await api("/api/add", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ playlist_id: $("playlist").value, track_id: t.id }),
+    });
+    inPlaylist.add(t.id);
+    markAdded(el, true);
+    toast(`Added: ${t.name}`);
+  } catch (e) { toast("Add failed: " + e.message, false); }
+}
+
+let debounce;
+$("q").addEventListener("input", () => {
+  clearTimeout(debounce);
+  debounce = setTimeout(async () => {
+    const q = $("q").value.trim();
+    lastQuery = q;
+    if (!q) { $("results").innerHTML = ""; $("more").style.display = "none"; return; }
+    try {
+      const { tracks } = await api(`/api/search?q=${encodeURIComponent(q)}`);
+      if (q === lastQuery) render(tracks, false);
+    } catch (e) { toast("Search failed: " + e.message, false); }
+  }, 350);
+});
+
+$("more").onclick = async () => {
+  try {
+    const { tracks } = await api(`/api/search?q=${encodeURIComponent(lastQuery)}&offset=${shown}`);
+    render(tracks, true);
+  } catch (e) { toast("Search failed: " + e.message, false); }
+};
+
+$("playlist").addEventListener("change", e => loadPlaylistIds(e.target.value));
+
+$("newPl").onclick = async () => {
+  const name = prompt("New playlist name:");
+  if (!name) return;
+  try {
+    const p = await api("/api/playlists", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+    const opt = new Option(p.name + " (0)", p.id, true, true);
+    $("playlist").add(opt);
+    await loadPlaylistIds(p.id);
+    toast(`Created: ${p.name}`);
+  } catch (e) { toast("Create failed: " + e.message, false); }
+};
+
+init().catch(e => toast(e.message, false));
+</script>
+</body>
+</html>

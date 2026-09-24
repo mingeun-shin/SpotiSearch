@@ -1,0 +1,5 @@
+spotipy>=2.26
+questionary>=2.0
+fastapi>=0.110
+uvicorn>=0.29
+python-dotenv>=1.0
