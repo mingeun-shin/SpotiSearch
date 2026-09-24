@@ -1,4 +1,4 @@
-# spotify-transfer
+# SpotiSearch
 
 Interactive CLI to move tracks between Spotify playlists with per-song match confirmation.
 
